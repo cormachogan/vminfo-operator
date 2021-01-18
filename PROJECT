@@ -1,0 +1,7 @@
+domain: corinternal.com
+repo: viminfo
+resources:
+- group: topology
+  kind: VMInfo
+  version: v1
+version: "2"

@@ -1,0 +1,7 @@
+apiVersion: topology.corinternal.com/v1
+kind: VMInfo
+metadata:
+  name: tkg-worker-1
+spec:
+  # Add fields here
+  nodename: tkg-cluster-1-18-5b-workers-kc5xn-dd68c4685-5v298
