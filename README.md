@@ -8,7 +8,7 @@ This is the second in the series of Kubernetes Operators to query the status of 
 
 ## What are we going to do in this tutorial? ##
 
-In this example, we will create a CRD called ```VMInfo```. VMInfo will contain the name of an virtual machine in its specification, possible a Kubernetes Nodes. When a Custom Resource (CR) is created and subsequently queried, we will call an operator (logic in a controller) whereby some details about the virtual machine will be returned via the status fields of the object through govmomi API calls.
+In this example, we will create a CRD called ```VMInfo```. VMInfo will contain the name of an virtual machine in its specification, possibly a Kubernetes Node. When a Custom Resource (CR) is created and subsequently queried, we will call an operator (logic in a controller) whereby some details about the virtual machine will be returned via the status fields of the object through govmomi API calls.
 
 The following will be created as part of this tutorial:
 
@@ -18,7 +18,7 @@ The following will be created as part of this tutorial:
     * Version: ```v1```
     * Specification will include a single item: ```Spec.Nodename```
 
-* One or more __HostInfo Custom Resource / Object__ will be created through yaml manifests, each manifest containing the hostname of an ESXi host that we wish to query. The fields which will be updated to contain the relevant information from the ESXi host (when the CR is queried) are:
+* One or more __VMInfo Custom Resource / Object__ will be created through yaml manifests, each manifest containing the nodename of a virtual machine that we wish to query. The fields which will be updated to contain the relevant information from the VM (when the CR is queried) are:
   * ```Status.GuestId```
   * ```Status.TotalCPU```
   * ```Status.ResvdCPU```
@@ -29,7 +29,6 @@ The following will be created as part of this tutorial:
   * ```Status.HWVersion```
   * ```Status.PathToVM```
 
-
 * An __Operator__ (or business logic) to retrieve virtual machine information specified in the CR will be coded in the controller for this CR.
 
 ## What is not covered in this tutorial? ##
@@ -38,7 +37,7 @@ The assumption is that you already have a working Kubernetes cluster. Installati
 
 * [Kind (Kubernetes in Docker)](https://kind.sigs.K8s.io/docs/user/quick-start/)
 
-The assumption is that you also have a __VMware vSphere environment__ comprising of at least one ESXi hypervisor which is managed by a vCenter server. While the thought process is that your Kubernetes cluster will be running on vSphere infrastructure, and thus this operator will help you examine how the underlying vSphere resources are being consumed by the Kubernetes clusters running on top, it is not necessary for this to be the case for the purposes of this tutorial. You can use this code to query any vSphere environment from Kubernetes.
+The assumption is that you also have a __VMware vSphere environment__ comprising of at least one ESXi hypervisor with at least one virtual machine which is managed by a vCenter server. While the thought process is that your Kubernetes cluster will be running on vSphere infrastructure, and thus this operator will help you examine how the underlying vSphere resources are being consumed by the Kubernetes clusters running on top, it is not necessary for this to be the case for the purposes of this tutorial. You can use this code to query any vSphere environment from Kubernetes.
 
 ## What if I just want to understand some basic CRD concepts? ##
 
@@ -60,7 +59,7 @@ If you are interested in learning more about Golang basics, I found [this site](
 
 ## Step 2 - KubeBuilder Scaffolding ##
 
-The CRD is built using [kubebuilder](https://go.kubebuilder.io/).  I'm not going to spend a great deal of time talking about __KubeBuilder__. Suffice to say that KubeBuilder builds a directory structure containing all of the templates (or scaffolding) necessary for the creation of CRDs. Once this scaffolding is in place, this turorial will show you how to add your own specification fields and status fields, as well as how to add your own operator logic. In this example, our logic will login to vSphere, query and return virtual machine information via a Kubernetes CR / object / Kind called HostInfo, the values of which will be used to populate status fields in our CRs.
+The CRD is built using [kubebuilder](https://go.kubebuilder.io/).  I'm not going to spend a great deal of time talking about __KubeBuilder__. Suffice to say that KubeBuilder builds a directory structure containing all of the templates (or scaffolding) necessary for the creation of CRDs. Once this scaffolding is in place, this turorial will show you how to add your own specification fields and status fields, as well as how to add your own operator logic. In this example, our logic will login to vSphere, query and return virtual machine information via a Kubernetes CR / object / Kind called __VMInfo__, the values of which will be used to populate status fields in our CRs.
 
 The following steps will create the scaffolding to get started.
 
@@ -94,7 +93,7 @@ Now we can proceed with building out the rest of the directory structure. The fo
 kubebuilder init --domain corinternal.com
 ```
 
-We must now define a resource. To do that, we again use kubebuilder to create the resource, specifying the API group, its version and supported kind. My group is called topology, my kind is called HostInfo and my initial version is v1.
+We must now define a resource. To do that, we again use kubebuilder to create the resource, specifying the API group, its version and supported kind. My API group is called __topology__, my kind is called __VMInfo__ and my initial version is __v1__.
 
 ```cmd
 kubebuilder create api \
@@ -114,17 +113,17 @@ Customer Resource Definitions [CRD](https://kubernetes.io/docs/concepts/extend-k
 This is done by modifying the __api/v1/vminfo_types.go__ file. Here is the initial scaffolding / template provided by kubebuilder:
 
 ```go
-// HostInfoSpec defines the desired state of HostInfo
+// VMInfoSpec defines the desired state of VMInfo
 type HostInfoSpec struct {
         // INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
         // Important: Run "make" to regenerate code after modifying this file
 
-        // Foo is an example field of HostInfo. Edit HostInfo_types.go to remove/update
+        // Foo is an example field of VMInfo. Edit VMInfo_types.go to remove/update
         Foo string `json:"foo,omitempty"`
 }
 
-// HostInfoStatus defines the observed state of HostInfo
-type HostInfoStatus struct {
+// VMInfoStatus defines the observed state of VMInfo
+type VMInfoStatus struct {
         // INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
         // Important: Run "make" to regenerate code after modifying this file
 }
@@ -255,7 +254,7 @@ spec:
   nodename: tkg-cluster-1-18-5b-workers-kc5xn-dd68c4685-5v298
 ```
 
-To see if it works, we need to create this HostInfo Custom Resource.
+To see if it works, we need to create this VMInfo Custom Resource.
 
 ```shell
 $ kubectl create -f topology_v1_vminfo.yaml
@@ -321,7 +320,7 @@ metadata:
 
 ## Step 6 - Create the controller / manager ##
 
-This appears to be working as expected. However there are no __Status__ fields displayed with our VM information in the __yaml__ output above. To see this information, we need to implement our operator / controller logic to do this. The controller implements the desired business logic. In this controller, we first read the vCenter server credentials from a Kubernetes secret passed to the controller (which we will create shortly). We will then open a session to my vCenter server, and get a list of virtual machines that it manages. We will then look for the virtual machine that is specified in the __spec.nodename__ field in the CR, and retrieve various information for this virtual machine. Finally we will update the appropriate status fields with this information, and we should be able to query it using the __kubectl get hostinfo -o yaml__ command seen previously.
+This appears to be working as expected. However there are no __Status__ fields displayed with our VM information in the __yaml__ output above. To see this information, we need to implement our operator / controller logic to do this. The controller implements the desired business logic. In this controller, we first read the vCenter server credentials from a Kubernetes secret passed to the controller (which we will create shortly). We will then open a session to my vCenter server, and get a list of virtual machines that it manages. We will then look for the virtual machine that is specified in the __spec.nodename__ field in the CR, and retrieve various information for this virtual machine. Finally we will update the appropriate status fields with this information, and we should be able to query it using the __kubectl get vminfo -o yaml__ command seen previously.
 
 __Note:__ As has been pointed out, this code is not very optomized, and logging into vCenter Server for every reconcile request is not ideal. The login function should be moved out of the reconcile request, and it is something I will look at going forward. But for our present learning purposes, its fine to do this as we won't be overloading the vCenter Server with our handful of reconcile requests.
 
@@ -346,7 +345,7 @@ Considering the business logic that I described above, this is what my updated _
 func (r *VMInfoReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 
         ctx := context.Background()
-        log := r.Log.WithValues("hostinfo", req.NamespacedName)
+        log := r.Log.WithValues("vminfo", req.NamespacedName)
 
         ch := &topologyv1.VMInfo{}
         if err := r.Client.Get(ctx, req.NamespacedName, ch); err != nil {
@@ -468,12 +467,12 @@ With the controller logic now in place, we can now proceed to build the controll
 
 At this point everything is in place to enable us to deploy the controller to the Kubernete cluster. If you remember back to the prerequisites in step 1, we said that you need access to a container image registry, such as docker.io or quay.io, or VMware's own [Harbor](https://github.com/goharbor/harbor/blob/master/README.md) registry. This is where we need this access to a registry, as we need to push the controller's container image somewhere that can be accessed from your Kubernetes cluster.
 
-The __Dockerfile__ with the appropriate directives is already in place to build the container image and include the controller / manager logic. This was once again taken care of by kubebuilder. You must ensure that you login to your image repository, i.e. docker login, before proceeding with the __make__ commands, e.g.
+The __Dockerfile__ with the appropriate directives is already in place to build the container image and include the controller / manager logic. This was once again taken care of by kubebuilder. You must ensure that you login to your image repository, i.e. docker login, before proceeding with the __make__ commands. In this case, I am using the quay.io repository, e.g.
 
 ```shell
 $ docker login quay.io
 Username: cormachogan
-Password: `***********`
+Password: ***********
 WARNING! Your password will be stored unencrypted in /home/cormac/.docker/config.json.
 Configure a credential helper to remove this warning. See
 https://docs.docker.com/engine/reference/commandline/login/#credentials-store
@@ -527,7 +526,7 @@ Kubebuilder provides a manager manifest scaffold file for deploying the controll
       terminationGracePeriodSeconds: 10
 ```
 
-Note that the __secret__, called __vc-creds__ above, contains the vCenter credentials. This secret needs to be deployed in the same namespace that the controller is going to run in, which is __hostinfo-system__. Thus, the namespace and secret are created using the following commands, with the environment modified to your own vSphere infrastructure obviously:
+Note that the __secret__, called __vc-creds__ above, contains the vCenter credentials. This secret needs to be deployed in the same namespace that the controller is going to run in, which is __vminfo-system__. Thus, the namespace and secret are created using the following commands, with the environment modified to your own vSphere infrastructure obviously:
 
 ```shell
 $ kubectl create ns vminfo-system
@@ -549,7 +548,7 @@ We are now ready to deploy the controller to the Kubernetes cluster.
 
 To deploy the controller, we run another __make__ command. This will take care of all of the RBAC, cluster roles and role bindings necessary to run the controller, as well as pinging up the correct image, etc.
 
-```Makefile
+```shell
 make deploy IMG=quay.io/cormachogan/vminfo-controller:v1
 ```
 
@@ -584,7 +583,7 @@ vminfo-controller-manager-79d6756854-b8jdq     2/2     Running   0          72s
 If you experience issues with the one of the pods not coming online, use the following command to display the Pod status and examine the events.
 
 ```shell
-$ kubectl describe pod vminfo-controller-manager-79d6756854-b8jdq -n vminfo-system
+kubectl describe pod vminfo-controller-manager-79d6756854-b8jdq -n vminfo-system
 ```
 
 ### Step 10.3 - Check the controller / manager logs ###
@@ -594,8 +593,6 @@ If we query the __logs__ on the manager container, we should be able to observe 
 ```shell
 kubectl logs vminfo-controller-manager-79d6756854-b8jdq -n vminfo-system manager
 ```
-
-
 
 ### Step 10.4 - Check if CPU statistics are returned in the status ###
 
@@ -653,7 +650,7 @@ status:
   totalCPU: 2
 ```
 
-__Success!!!__ Note that the output above is showing various status fields as per our business logic implemented in the controller. How cool is that? You can now go ahead and create additional VMInfo manifests for different virtual machines in your vSphere environment managed by your vCenter server by specifying different nodenames in the manifest spec, and all you to get status from those VMs as well.
+__Success!!!__ Note that the output above is showing various status fields as per our business logic implemented in the controller. How cool is that? You can now go ahead and create additional __VMInfo__ manifests for different virtual machines in your vSphere environment managed by your vCenter server by specifying different nodenames in the manifest spec, and all you to get status from those VMs as well.
 
 ## Cleanup ##
 
