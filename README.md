@@ -711,6 +711,7 @@ status:
   resvdCPU: 0
   resvdMem: 0
   totalCPU: 2
+  totalMem: 4096
 ```
 
 __Success!!!__ Note that the output above is showing various status fields as per our business logic implemented in the controller. How cool is that? You can now go ahead and create additional __VMInfo__ manifests for different virtual machines in your vSphere environment managed by your vCenter server by specifying different nodenames in the manifest spec, and all you to get status from those VMs as well.
