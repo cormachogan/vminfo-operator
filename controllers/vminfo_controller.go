@@ -20,15 +20,11 @@ import (
 	"context"
 	"fmt"
 	"github.com/go-logr/logr"
-	"github.com/vmware/govmomi/session/cache"
 	"github.com/vmware/govmomi/view"
 	"github.com/vmware/govmomi/vim25"
 	"github.com/vmware/govmomi/vim25/mo"
-	"github.com/vmware/govmomi/vim25/soap"
 	k8serr "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
-	"net/url"
-	"os"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	topologyv1 "viminfo/api/v1"
@@ -37,6 +33,7 @@ import (
 // VMInfoReconciler reconciles a VMInfo object
 type VMInfoReconciler struct {
 	client.Client
+	VC     *vim25.Client
 	Log    logr.Logger
 	Scheme *runtime.Scheme
 }
@@ -47,7 +44,7 @@ type VMInfoReconciler struct {
 func (r *VMInfoReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 
 	ctx := context.Background()
-	log := r.Log.WithValues("hostinfo", req.NamespacedName)
+	log := r.Log.WithValues("VMInfo", req.NamespacedName)
 
 	ch := &topologyv1.VMInfo{}
 	if err := r.Client.Get(ctx, req.NamespacedName, ch); err != nil {
@@ -61,58 +58,17 @@ func (r *VMInfoReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 	msg := fmt.Sprintf("received reconcile request for %q (namespace: %q)", ch.GetName(), ch.GetNamespace())
 	log.Info(msg)
 
-	// We will retrieve these environment variables through passing 'secret' parameters via the manager manifest
-
-	vc := os.Getenv("GOVMOMI_URL")
-	user := os.Getenv("GOVMOMI_USERNAME")
-	pwd := os.Getenv("GOVMOMI_PASSWORD")
-
-	//
-	// Create a vSphere/vCenter client
-	//
-	//    The govmomi client requires a URL object, u, not just a string representation of the vCenter URL.
-
-	u, err := soap.ParseURL(vc)
-
-	if err != nil {
-		msg := fmt.Sprintf("unable to parse vCenter URL: error %s", err)
-		log.Info(msg)
-		return ctrl.Result{}, err
-	}
-
-	u.User = url.UserPassword(user, pwd)
-
-	//
-	// Ripped from https://github.com/vmware/govmomi/blob/master/examples/examples.go
-	//
-
-	// Share govc's session cache
-	s := &cache.Session{
-		URL:      u,
-		Insecure: true,
-	}
-
-	c := new(vim25.Client)
-
-	err = s.Login(ctx, c, nil)
-
-	if err != nil {
-		msg := fmt.Sprintf("unable to login to vCenter: error %s", err)
-		log.Info(msg)
-		return ctrl.Result{}, err
-	}
-
 	//
 	// Create a view manager
 	//
 
-	m := view.NewManager(c)
+	m := view.NewManager(r.VC)
 
 	//
 	// Create a container view of VirtualMachine objects
 	//
 
-	v, err := m.CreateContainerView(ctx, c.ServiceContent.RootFolder, []string{"VirtualMachine"}, true)
+	v, err := m.CreateContainerView(ctx, r.VC.ServiceContent.RootFolder, []string{"VirtualMachine"}, true)
 
 	if err != nil {
 		msg := fmt.Sprintf("unable to create container view for VirtualMachines: error %s", err)

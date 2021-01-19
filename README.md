@@ -41,7 +41,7 @@ The assumption is that you also have a __VMware vSphere environment__ comprising
 
 ## What if I just want to understand some basic CRD concepts? ##
 
-If this sounds even too daunting at this stage, I strongly recommend checking out the excellent tutorial on CRDs from my colleague, __Rafael Brito__. His [RockBand](https://github.com/brito-rafa/k8s-webhooks/blob/master/single-gvk/README.md) CRD tutorial uses some very simple concepts to explain how CRDs, CRs, Operators, spec and status fields work.
+If this sounds even too daunting at this stage, I strongly recommend checking out the excellent tutorial on CRDs from my colleague, __Rafael Brito__. His [RockBand](https://github.com/brito-rafa/k8s-webhooks/blob/master/single-gvk/README.md) CRD tutorial uses some very simple concepts to explain how CRDs, CRs, Operators, spec and status fields work, and is a great way to get started on Kubernetes Operators.
 
 ## Step 1 - Software Requirements ##
 
@@ -55,11 +55,11 @@ You will need the following components pre-installed on your desktop or workstat
 * Access to a Container Image Repositor (docker.io, quay.io, harbor)
 * A __make__ binary - used by Kubebuilder
 
-If you are interested in learning more about Golang basics, I found [this site](https://tour.golang.org/welcome/1) very helpful.
+If you are interested in learning more about Golang basics, which is the code used to create operators, I found [this site](https://tour.golang.org/welcome/1) very helpful.
 
 ## Step 2 - KubeBuilder Scaffolding ##
 
-The CRD is built using [kubebuilder](https://go.kubebuilder.io/).  I'm not going to spend a great deal of time talking about __KubeBuilder__. Suffice to say that KubeBuilder builds a directory structure containing all of the templates (or scaffolding) necessary for the creation of CRDs. Once this scaffolding is in place, this turorial will show you how to add your own specification fields and status fields, as well as how to add your own operator logic. In this example, our logic will login to vSphere, query and return virtual machine information via a Kubernetes CR / object / Kind called __VMInfo__, the values of which will be used to populate status fields in our CRs.
+The CRD is built using [kubebuilder](https://go.kubebuilder.io/).  I'm not going to spend a great deal of time talking about __KubeBuilder__. Suffice to say that KubeBuilder builds a directory structure containing all of the templates (or scaffolding) necessary for the creation of CRDs and controllers. Once this scaffolding is in place, this turorial will show you how to add your own specification fields and status fields, as well as how to add your own operator logic. In this example, our logic will login to vSphere, query and return virtual machine information via a Kubernetes CR / object / Kind called __VMInfo__, the values of which will be used to populate status fields in our CRs.
 
 The following steps will create the scaffolding to get started.
 
@@ -322,11 +322,115 @@ metadata:
 
 This appears to be working as expected. However there are no __Status__ fields displayed with our VM information in the __yaml__ output above. To see this information, we need to implement our operator / controller logic to do this. The controller implements the desired business logic. In this controller, we first read the vCenter server credentials from a Kubernetes secret passed to the controller (which we will create shortly). We will then open a session to my vCenter server, and get a list of virtual machines that it manages. We will then look for the virtual machine that is specified in the __spec.nodename__ field in the CR, and retrieve various information for this virtual machine. Finally we will update the appropriate status fields with this information, and we should be able to query it using the __kubectl get vminfo -o yaml__ command seen previously.
 
-__Note:__ As has been pointed out, this code is not very optomized, and logging into vCenter Server for every reconcile request is not ideal. The login function should be moved out of the reconcile request, and it is something I will look at going forward. But for our present learning purposes, its fine to do this as we won't be overloading the vCenter Server with our handful of reconcile requests.
-
 Once all this business logic has been added in the controller, we will need to be able to run it in the Kubernetes cluster. To achieve this, we will build a container image to run the controller logic. This will be provisioned in the Kubernetes cluster using a Deployment manifest. The deployment contains a single Pod that runs the container (it is called __manager__). The deployment ensures that my Pod is restarted in the event of a failure.
 
-This is what kubebuilder provides as controller scaffolding - it is found in __controllers/vminfo_controller.go__ - we are most interested in the __VMInfoReconciler__ function:
+__Note:__ The initial version of this code was not very optomized as it placed the vSphere session login in the controller reconcile code, and logging into vCenter Server for every reconcile request is not ideal. The login function has now been moved out of the reconcile request, and is now in __main.go__. This is the vlogin fucntion that I created in main.go:
+
+```go
+//
+// - vSphere session login function
+//
+
+func vlogin(ctx context.Context, vc, user, pwd string) (*vim25.Client, error) {
+
+        //
+        // Create a vSphere/vCenter client
+        //
+        // The govmomi client requires a URL object, u.
+        // You cannot use a string representation of the vCenter URL.
+        // soap.ParseURL provides the correct object format.
+        //
+
+        u, err := soap.ParseURL(vc)
+
+        if u == nil {
+                setupLog.Error(err, "Unable to parse URL. Are required environment variables set?", "controller", "VMInfo")
+                os.Exit(1)
+        }
+
+        if err != nil {
+                setupLog.Error(err, "URL parsing not successful", "controller", "VMInfo")
+                os.Exit(1)
+        }
+
+        u.User = url.UserPassword(user, pwd)
+
+        //
+        // Session cache example taken from https://github.com/vmware/govmomi/blob/master/examples/examples.go
+        //
+        // Share govc's session cache
+        //
+        s := &cache.Session{
+                URL:      u,
+                Insecure: true,
+        }
+
+        //
+        // Create new client
+        //
+        c := new(vim25.Client)
+
+        //
+        // Login using client c and cache s
+        //
+        err = s.Login(ctx, c, nil)
+
+        if err != nil {
+                setupLog.Error(err, " login not successful", "controller", "VMInfo")
+                os.Exit(1)
+        }
+
+        return c, nil
+}
+
+```
+
+This is where the vlogin function is called in the main function:
+
+```go
+//
+        // Retrieve vCenter URL, username and password from environment variables
+        // These are provided via the manager manifest when controller is deployed
+        //
+
+        vc := os.Getenv("GOVMOMI_URL")
+        user := os.Getenv("GOVMOMI_USERNAME")
+        pwd := os.Getenv("GOVMOMI_PASSWORD")
+
+        //
+        // Create context, and get vSphere session information
+        //
+
+        ctx, cancel := context.WithCancel(context.Background())
+        defer cancel()
+
+        c, err := vlogin(ctx, vc, user, pwd)
+        if err != nil {
+                setupLog.Error(err, "unable to get login session to vSphere")
+                os.Exit(1)
+        }
+```
+
+Finally, this is the modified Reconciler call, which now includes the vSphere session information:
+
+```go
+ //
+        // Add a new field, VC, to send session info to Reconciler
+        //
+        if err = (&controllers.VMInfoReconciler{
+                Client: mgr.GetClient(),
+                VC:     c,
+                Log:    ctrl.Log.WithName("controllers").WithName("VMInfo"),
+                Scheme: mgr.GetScheme(),
+        }).SetupWithManager(mgr); err != nil {
+                setupLog.Error(err, "unable to create controller", "controller", "VMInfo")
+                os.Exit(1)
+        }
+```
+
+The code complete [main.go](main.go) is available here.
+
+Let's next turn our attention to the controller code. This is what kubebuilder provides as controller scaffolding - it is found in __controllers/vminfo_controller.go__ - we are most interested in the __VMInfoReconciler__ function:
 
 ```go
 func (r *VMInfoReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
@@ -339,13 +443,13 @@ func (r *VMInfoReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 }
 ```
 
-Considering the business logic that I described above, this is what my updated __VMInfoReconciler__ function looks like. Hopefully the comments make is easy to understand, but at the end of the day, when this controller gets a reconcile request (something as simple as a get command will trigger this), the status fields in the Custom Resource are updated for the specific VM in the spec.nodename field. Note that I have omitted a number of required imports that also need to be added to the controller. Refer to the code for the complete [__vminfo_controller.go__](./controllers/vminfo_controller.go) code. One thing to note is that I am enabling insecure logins by default. This is something that you may wish to change in your code.
+Considering the business logic that I described above, this is what my updated __VMInfoReconciler__ function looks like. Hopefully the comments make is easy to understand, but at the end of the day, when this controller gets a reconcile request (something as simple as a get command will trigger this), the status fields in the Custom Resource are updated for the specific VM in the spec.nodename field. Note that I have omitted a number of required imports that also need to be added to the controller. Refer to the code for the complete [__vminfo_controller.go__](./controllers/vminfo_controller.go) code.
 
 ```go
 func (r *VMInfoReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 
         ctx := context.Background()
-        log := r.Log.WithValues("vminfo", req.NamespacedName)
+        log := r.Log.WithValues("VMInfo", req.NamespacedName)
 
         ch := &topologyv1.VMInfo{}
         if err := r.Client.Get(ctx, req.NamespacedName, ch); err != nil {
@@ -359,58 +463,17 @@ func (r *VMInfoReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
         msg := fmt.Sprintf("received reconcile request for %q (namespace: %q)", ch.GetName(), ch.GetNamespace())
         log.Info(msg)
 
-        // We will retrieve these environment variables through passing 'secret' parameters via the manager manifest
-
-        vc := os.Getenv("GOVMOMI_URL")
-        user := os.Getenv("GOVMOMI_USERNAME")
-        pwd := os.Getenv("GOVMOMI_PASSWORD")
-
-        //
-        // Create a vSphere/vCenter client
-        //
-        //    The govmomi client requires a URL object, u, not just a string representation of the vCenter URL.
-
-        u, err := soap.ParseURL(vc)
-
-        if err != nil {
-                msg := fmt.Sprintf("unable to parse vCenter URL: error %s", err)
-                log.Info(msg)
-                return ctrl.Result{}, err
-        }
-
-        u.User = url.UserPassword(user, pwd)
-
-        //
-        // Ripped from https://github.com/vmware/govmomi/blob/master/examples/examples.go
-        //
-
-        // Share govc's session cache
-        s := &cache.Session{
-                URL:      u,
-                Insecure: true,
-        }
-
-        c := new(vim25.Client)
-
-        err = s.Login(ctx, c, nil)
-
-        if err != nil {
-                msg := fmt.Sprintf("unable to login to vCenter: error %s", err)
-                log.Info(msg)
-                return ctrl.Result{}, err
-        }
-
         //
         // Create a view manager
         //
 
-        m := view.NewManager(c)
+        m := view.NewManager(r.VC)
 
         //
         // Create a container view of VirtualMachine objects
         //
 
-        v, err := m.CreateContainerView(ctx, c.ServiceContent.RootFolder, []string{"VirtualMachine"}, true)
+        v, err := m.CreateContainerView(ctx, r.VC.ServiceContent.RootFolder, []string{"VirtualMachine"}, true)
 
         if err != nil {
                 msg := fmt.Sprintf("unable to create container view for VirtualMachines: error %s", err)
@@ -461,7 +524,7 @@ func (r *VMInfoReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 }
 ```
 
-With the controller logic now in place, we can now proceed to build the controller / manager.
+With the controller logic now in place, we can now proceed to build and deploy the controller / manager.
 
 ## Step 7 - Build the controller ##
 
@@ -642,7 +705,7 @@ spec:
 status:
   guestId: vmwarePhoton64Guest
   hwVersion: vmx-17
-  ipAddress: 10.27.62.45
+  ipAddress: 192.168.62.45
   pathToVM: '[vsanDatastore] 4d56b55f-11db-8822-6463-246e962f4914/tkg-cluster-1-18-5b-workers-kc5xn-dd68c4685-5v298.vmx'
   powerState: poweredOn
   resvdCPU: 0
@@ -670,7 +733,7 @@ Deleting the deployment will removed the ReplicaSet and Pods associated with the
 ```shell
 $ kubectl get deploy -n vminfo-system
 NAME                          READY   UP-TO-DATE   AVAILABLE   AGE
-vminfo-controller-manager   1/1     1            1           2d8h
+vminfo-controller-manager     1/1     1            1           2d8h
 ```
 
 ```shell

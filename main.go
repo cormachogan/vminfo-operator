@@ -17,6 +17,12 @@ limitations under the License.
 package main
 
 import (
+	"context"
+	"github.com/vmware/govmomi/session/cache"
+	"github.com/vmware/govmomi/vim25"
+	"github.com/vmware/govmomi/vim25/soap"
+	"net/url"
+
 	"flag"
 	"os"
 
@@ -43,6 +49,60 @@ func init() {
 	// +kubebuilder:scaffold:scheme
 }
 
+// - vSphere session login function
+
+func vlogin(ctx context.Context, vc, user, pwd string) (*vim25.Client, error) {
+
+	//
+	// Create a vSphere/vCenter client
+	//
+	// The govmomi client requires a URL object, u.
+	// You cannot use a string representation of the vCenter URL.
+	// soap.ParseURL provides the correct object format.
+	//
+
+	u, err := soap.ParseURL(vc)
+
+	if u == nil {
+		setupLog.Error(err, "Unable to parse URL. Are required environment variables set?", "controller", "VMInfo")
+		os.Exit(1)
+	}
+
+	if err != nil {
+		setupLog.Error(err, "URL parsing not successful", "controller", "VMInfo")
+		os.Exit(1)
+	}
+
+	u.User = url.UserPassword(user, pwd)
+
+	//
+	// Session cache example taken from https://github.com/vmware/govmomi/blob/master/examples/examples.go
+	//
+	// Share govc's session cache
+	//
+	s := &cache.Session{
+		URL:      u,
+		Insecure: true,
+	}
+
+	//
+	// Create new client
+	//
+	c := new(vim25.Client)
+
+	//
+	// Login using client c and cache s
+	//
+	err = s.Login(ctx, c, nil)
+
+	if err != nil {
+		setupLog.Error(err, " login not successful", "controller", "VMInfo")
+		os.Exit(1)
+	}
+
+	return c, nil
+}
+
 func main() {
 	var metricsAddr string
 	var enableLeaderElection bool
@@ -66,8 +126,34 @@ func main() {
 		os.Exit(1)
 	}
 
+	//
+	// Retrieve vCenter URL, username and password from environment variables
+	// These are provided via the manager manifest when controller is deployed
+	//
+
+	vc := os.Getenv("GOVMOMI_URL")
+	user := os.Getenv("GOVMOMI_USERNAME")
+	pwd := os.Getenv("GOVMOMI_PASSWORD")
+
+	//
+	// Create context, and get vSphere session information
+	//
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	c, err := vlogin(ctx, vc, user, pwd)
+	if err != nil {
+		setupLog.Error(err, "unable to get login session to vSphere")
+		os.Exit(1)
+	}
+
+	//
+	// Add a new field, VC, to send session info to Reconciler
+	//
 	if err = (&controllers.VMInfoReconciler{
 		Client: mgr.GetClient(),
+		VC:     c,
 		Log:    ctrl.Log.WithName("controllers").WithName("VMInfo"),
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
