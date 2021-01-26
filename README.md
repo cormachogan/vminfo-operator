@@ -4,7 +4,7 @@ This repository contains a very simple Kubernetes Operator that uses VMware's __
 
 You can think of a CRD as representing the desired state of a Kubernetes object or Custom Resource, and the function of the operator is to run the logic or code to make that desired state happen - in other words the operator has the logic to do whatever is necessary to achieve the object's desired state.
 
-This is the second in the series of Kubernetes Operators to query the status of vSphere resources. The first was built to query ESXi resources (called __HostInfo__). Details about that operator can be found [here](https://github.com/cormachogan/hostinfo-operator).
+This is the second in the series of Kubernetes Operators to query the status of vSphere resources. The first tutorial was built to query ESXi resources (called __HostInfo__). Details about that operator tutorial can be found [here](https://github.com/cormachogan/hostinfo-operator). Another operator tutorial was built to query information from First Class Disks (FCDs). FCDs are used to back Kubernetes Persistent Volumes when the PVs are provisioned by the vSphere CSI driver. You can find the details about the FCD operator tutorial [here](https://github.com/cormachogan/fcdinfo-operator).
 
 ## What are we going to do in this tutorial? ##
 
@@ -114,7 +114,7 @@ This is done by modifying the __api/v1/vminfo_types.go__ file. Here is the initi
 
 ```go
 // VMInfoSpec defines the desired state of VMInfo
-type HostInfoSpec struct {
+type VMInfoSpec struct {
         // INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
         // Important: Run "make" to regenerate code after modifying this file
 
@@ -231,7 +231,7 @@ topology_v1_vminfo.yaml
 ```
 
 ```yaml
-$ cat topology_v1_hostinfo.yaml
+$ cat topology_v1_vminfo.yaml
 apiVersion: topology.corinternal.com/v1
 kind: VMInfo
 metadata:
@@ -244,7 +244,7 @@ spec:
 We need to slightly modify this sample manifest so that the specification field matches what we added to our CRD. Note the spec: above where it states 'Add fields here'. We have removed the __foo__ field and added a __spec.nodename__ field, as per the __api/v1/vminfo_types.go__ modification earlier. Thus, after a simple modification, the CR manifest looks like this, where __tkg-cluster-1-18-5b-workers-kc5xn-dd68c4685-5v298__ is the name of the virtual machine that we wish to query. It is in fact a Tanzu Kubernetes worker node. It could be any virtual machine in your vSphere infrastructure.
 
 ```yaml
-$ cat topology_v1_hostinfo.yaml
+$ cat topology_v1_vminfo.yaml
 apiVersion: topology.corinternal.com/v1
 kind: VMInfo
 metadata:
@@ -651,7 +651,7 @@ kubectl describe pod vminfo-controller-manager-79d6756854-b8jdq -n vminfo-system
 
 ### Step 10.3 - Check the controller / manager logs ###
 
-If we query the __logs__ on the manager container, we should be able to observe successful startup messages as well as successful reconcile requests from the HostInfo CR that we already deployed back in step 5. These reconcile requests should update the __Status__ fields with CPU information as per our controller logic. The command to query the manager container logs in the controller Pod is as follows:
+If we query the __logs__ on the manager container, we should be able to observe successful startup messages as well as successful reconcile requests from the VMInfo CR that we already deployed back in step 5. These reconcile requests should update the __Status__ fields with CPU information as per our controller logic. The command to query the manager container logs in the controller Pod is as follows:
 
 ```shell
 kubectl logs vminfo-controller-manager-79d6756854-b8jdq -n vminfo-system manager
@@ -659,7 +659,7 @@ kubectl logs vminfo-controller-manager-79d6756854-b8jdq -n vminfo-system manager
 
 ### Step 10.4 - Check if CPU statistics are returned in the status ###
 
-Last but not least, let's see if we can see the CPU information in the __status__ fields of the HostInfo object created earlier.
+Last but not least, let's see if we can see the CPU information in the __status__ fields of the VMInfo object created earlier.
 
 ```yaml
 $ kubectl get vminfo tkg-worker-1 -o yaml
@@ -720,7 +720,7 @@ __Success!!!__ Note that the output above is showing various status fields as pe
 
 To remove the __vminfo__ CR, operator and CRD, run the following commands.
 
-### Remove the HostInfo CR ###
+### Remove the VMInfo CR ###
 
 ```shell
 $ kubectl delete vminfo tkg-worker-1
